@@ -1,0 +1,9 @@
+{
+    "condicoes_iniciais": "data/processed/ic_2000-01-01.json",
+    "modelo_forca": "newton",
+    "integrador": "verlet",
+    "passo_dias": 0.0416667,
+    "duracao_dias": 36525,
+    "salvar_a_cada_dias": 10,
+    "saida": "results/"
+}

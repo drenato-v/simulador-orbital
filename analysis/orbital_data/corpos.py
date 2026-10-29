@@ -1,0 +1,1 @@
+# tabela de IDs (Sol=10, Terra=399...)

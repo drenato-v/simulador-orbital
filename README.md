@@ -1,192 +1,172 @@
-# 🪐 Simulador Orbital
+# Simulador Orbital
 
-Simulador de órbitas planetárias do Sistema Solar que combina **Python** e **C**. A parte em Python busca dados reais dos planetas numa API pública, calcula as condições iniciais de cada órbita e os disponibiliza numa **API REST** própria. A parte em C lê esses dados e calcula o movimento dos planetas ao redor do Sol com a **Lei da Gravitação Universal de Newton**.
+Simulador do Sistema Solar que calcula o movimento dos planetas a partir das leis da física e **compara o resultado com as efemérides da NASA (JPL Horizons)**. O objetivo não é só desenhar órbitas: é medir, com números, quanto erro cada simplificação física introduz.
 
-> 🚧 **Projeto em desenvolvimento.** A coleta de dados e a API REST estão funcionais; a integração da simulação física no programa em C está em andamento. Veja o [Roadmap](#-roadmap).
+Mais adiante, o mesmo motor vai simular asteroides e foguetes.
+
+> 🚧 **Em reestruturação.** O projeto foi reorganizado do zero (veja [Arquitetura](docs/arquitetura.md)). O código da primeira versão está guardado em [`legacy/`](legacy/) e será migrado para a nova estrutura.
 
 ---
 
 ## Sumário
 
-1. [Como funciona](#-como-funciona)
-2. [A física por trás](#-a-física-por-trás)
-3. [Estrutura do projeto](#-estrutura-do-projeto)
+1. [A ideia científica](#-a-ideia-científica)
+2. [Como o projeto funciona](#️-como-o-projeto-funciona)
+3. [Estrutura de pastas](#-estrutura-de-pastas)
 4. [Como executar](#-como-executar)
-5. [API REST](#-api-rest)
-6. [Roadmap](#-roadmap)
+5. [Roadmap](#️-roadmap)
+6. [Documentação](#-documentação)
 7. [Créditos](#-créditos)
 
 ---
 
-## ⚙️ Como funciona
+## A ideia científica
+
+**Efeméride** é uma tabela da posição e da velocidade de corpos celestes ao longo do tempo. As efemérides do JPL (versão DE440) são o padrão usado pela NASA para navegar sondas. Elas vêm de um modelo físico completo ajustado a décadas de observações.
+
+Este projeto usa o Horizons de duas formas:
+
+- **Ponto de partida.** As posições e velocidades reais de todos os planetas numa data (as *condições iniciais*).
+- **Gabarito.** Depois de simular anos ou séculos, a posição calculada é comparada com a do Horizons na mesma data.
+
+Entre uma coisa e outra, quem calcula é o nosso código. A física é acrescentada em degraus, e cada degrau é um experimento:
+
+| Nível | Modelo                                       | O que ele ignora                  |
+| ------ | -------------------------------------------- | --------------------------------- |
+| 1      | Kepler (dois corpos, solução analítica)   | A atração entre os planetas     |
+| 2      | Newton com N corpos (integração numérica) | A relatividade                    |
+| 3      | Newton + correção da relatividade geral    | Quase nada no nível dos planetas |
+
+O experimento principal: o periélio de Mercúrio avança cerca de **574″ por século**. A gravidade newtoniana dos outros planetas explica uns 531″. Os **43″** restantes são o efeito da relatividade geral. O nível 2 deve medir o primeiro valor, e o nível 3 o segundo.
+
+Detalhes em [docs/fisica.md](docs/fisica.md) e [docs/validacao.md](docs/validacao.md).
+
+---
+
+## Como o projeto funciona
 
 ```mermaid
-flowchart LR
-    A[API Ninjas<br/>Planets API] -->|HTTP GET| B[api_planeta.py<br/>coleta e converte]
-    B -->|salva| C[(planetas.json)]
-    C --> D[Flask<br/>API REST local]
-    C -->|cJSON| E[main.c<br/>leitura dos dados]
-    E --> F[planetas.c<br/>integração da órbita]
+flowchart TD
+    A[JPL Horizons API] -->|HTTP| B[analysis/orbital_data/horizons.py]
+    B --> C[(data/raw/<br/>resposta bruta, imutável)]
+    C -->|conversao.py| D[(data/processed/<br/>condições iniciais)]
+    D --> E[core/ — motor em C<br/>offline, determinístico]
+    F[config/*.json] --> E
+    E --> G[(results/<br/>trajetórias e energia)]
+    G --> H[comparar_com_referencia.py]
+    I[(data/reference/<br/>gabarito do Horizons)] --> H
+    H --> J[gráficos de erro]
 ```
 
-1. **Coleta (`api_planeta.py`):** para cada um dos 8 planetas, faz uma requisição à [API Ninjas](https://api-ninjas.com/api/planets) e recebe dados como massa, semieixo maior e período orbital.
-2. **Conversão:** transforma as unidades astronômicas da API em unidades do Sistema Internacional (kg, m, s) e calcula a **velocidade orbital média** e o **vetor de estado inicial** (posição e velocidade) de cada planeta.
-3. **Armazenamento:** grava tudo em `planetas.json`.
-4. **Disponibilização:** um servidor **Flask** expõe os dados por uma API REST, com rotas para listar, consultar e atualizar os planetas.
-5. **Simulação (C):** `main.c` lê o JSON com a biblioteca **cJSON**, e `planetas.c` implementa o tipo `Planetas` e a função que avança a órbita no tempo.
+Três princípios guiam a estrutura:
+
+1. **Cada parte tem uma única responsabilidade.** O Python busca e analisa dados. O C calcula a física. A web (no futuro) só desenha.
+2. **O motor em C nunca acessa a internet.** Ele lê arquivos e escreve arquivos. Por isso é testável, reproduzível e pode rodar no navegador via WebAssembly.
+3. **Os dados têm linhagem.** A resposta bruta da API fica guardada intacta, e tudo o mais é gerado a partir dela por scripts.
 
 ---
 
-## 🔭 A física por trás
+## Estrutura de pastas
 
-### Lei da Gravitação Universal
+```
+SimuladorOrbital/
+├── core/          #motor físico em C
+├── analysis/      #Python: acesso à API, conversão, comparação e gráficos
+├── data/          #dados brutos, processados e de referência
+├── config/        #parâmetros de cada simulação
+├── results/       #saídas das simulações (não versionadas)
+├── web/           #visualização 3D (futuro)
+├── docs/          #física, arquitetura e validação
+└── legacy/        #primeira versão do projeto, a ser migrada
+```
 
-**Definição.** Dois corpos de massas *M* e *m*, separados por uma distância *r*, se atraem com uma força de intensidade
-
-$$F = \frac{G\,M\,m}{r^2}$$
-
-em que *G* = 6,674 × 10⁻¹¹ N·m²/kg² é a constante gravitacional.
-
-**Desenvolvimento.** Pela segunda lei de Newton (*F = m·a*), a massa do planeta se cancela e a aceleração que o Sol (massa *M*☉ = 1,989 × 10³⁰ kg) provoca depende só da posição. Na forma vetorial, com o Sol na origem e o planeta em **r** = (x, y):
-
-$$\vec{a} = -\frac{G\,M_\odot}{|\vec{r}|^3}\,\vec{r} \quad\Rightarrow\quad a_x = -\frac{G M_\odot}{r^3}\,x, \qquad a_y = -\frac{G M_\odot}{r^3}\,y$$
-
-O sinal negativo indica que a aceleração aponta **para o Sol**. É exatamente o que a função `atualizar_orbita` calcula.
-
-### Condições iniciais
-
-O modelo parte de uma **órbita circular** no plano. Cada planeta começa sobre o eixo *x*, a uma distância igual ao seu semieixo maior *a*, com velocidade perpendicular ao raio (tangente à órbita):
-
-$$\vec{r}_0 = (a,\ 0) \qquad \vec{v}_0 = (0,\ v_{média}) \qquad v_{média} = \frac{2\pi a}{T}$$
-
-### Integração numérica
-
-**Definição.** Como a aceleração muda a cada instante, a órbita é calculada em pequenos passos de tempo Δt (**integração numérica**). O método usado é o **Euler semi-implícito**: primeiro atualiza a velocidade com a aceleração atual, depois atualiza a posição com a **velocidade já atualizada**:
-
-$$\vec{v}_{n+1} = \vec{v}_n + \vec{a}_n\,\Delta t \qquad \vec{r}_{n+1} = \vec{r}_n + \vec{v}_{n+1}\,\Delta t$$
-
-**Desenvolvimento.** A ordem das duas linhas importa. No Euler **explícito** (posição atualizada com a velocidade antiga), o planeta ganha energia a cada volta e a órbita se abre numa espiral. O Euler **semi-implícito** é *simplético*: conserva a energia de forma aproximada por longos períodos, e a órbita continua fechada. Quanto menor o Δt, mais precisa a simulação. Um passo de 1 hora (3600 s) já dá bons resultados para os planetas.
-
-### Exemplo — a Terra
-
-| Grandeza | Valor da API | Convertido (SI) |
-|---|---|---|
-| Semieixo maior *a* | 1 AU | 1,496 × 10¹¹ m |
-| Período *T* | 365,25 dias | 3,156 × 10⁷ s |
-| Velocidade média 2π*a*/*T* | — | **≈ 29 786 m/s** (≈ 107 000 km/h) |
-
-Como verificação, a velocidade de uma órbita circular também pode ser obtida só pela gravidade, com $v = \sqrt{G M_\odot / r}$ ≈ **29 788 m/s**. Os dois valores coincidem, o que confirma que as condições iniciais são consistentes com a física da simulação.
+A descrição de cada arquivo está em [docs/arquitetura.md](docs/arquitetura.md).
 
 ---
 
-## 📁 Estrutura do projeto
+## Como executar
 
-| Arquivo | Linguagem | Função |
-|---|---|---|
-| `api_planeta.py` | Python | Coleta os dados na API Ninjas, converte unidades, gera `planetas.json` e sobe a API REST com Flask |
-| `main.c` | C | Lê `planetas.json` e extrai nome, massa, posição e velocidade de cada planeta |
-| `planetas.h` | C | Interface do tipo `Planetas` (tipo opaco: os campos ficam escondidos em `planetas.c`) |
-| `planetas.c` | C | Criação/destruição de planetas e a integração da órbita (`atualizar_orbita`) |
-| `cJSON.c` / `cJSON.h` | C | Biblioteca de terceiros para ler JSON em C |
-| `planetas.json` | JSON | Gerado pelo script Python (não versionado) |
-
----
-
-## 🚀 Como executar
+> Os comandos abaixo descrevem o fluxo planejado. Eles passam a funcionar à medida que cada etapa do roadmap for concluída.
 
 ### Pré-requisitos
 
-- Python 3.9+
-- Um compilador C (`gcc` ou `clang`)
-- Uma chave gratuita da [API Ninjas](https://api-ninjas.com/register)
+- Python 3.10+
+- Um compilador C (`gcc` ou `clang`) e `make`
+- Nenhuma chave de API: o JPL Horizons é público e gratuito
 
-### 1. Coletar os dados e subir a API
-
-```bash
-pip install requests flask
-
-# a chave da API fica em variável de ambiente, nunca no código
-export API_NINJAS_KEY="sua_chave_aqui"
-
-python api_planeta.py
-```
-
-O script baixa os dados dos 8 planetas, grava `planetas.json` e inicia o servidor em `http://localhost:5000`.
-
-### 2. Compilar e rodar o programa em C
+### Passo a passo
 
 ```bash
-gcc main.c planetas.c cJSON.c -o simulador -lm
-./simulador
-```
+# 1. Instalar as dependências do Python
+python3 -m venv .venv && source .venv/bin/activate
+pip install -r analysis/requirements.txt
 
-O `-lm` liga a biblioteca matemática (`sqrt`, `pow`), usada nos cálculos da órbita.
+# 2. Baixar as condições iniciais (posições reais em 01/01/2000)
+python analysis/scripts/baixar_condicoes_iniciais.py --data 2000-01-01
+
+# 3. Compilar o motor e rodar os testes
+make
+make test
+
+# 4. Simular
+./build/simular config/simulacao_padrao.json
+
+# 5. Comparar com a NASA
+python analysis/scripts/comparar_com_referencia.py results/<pasta-da-execução>
+```
 
 ---
 
-## 🌐 API REST
+## Roadmap
 
-| Método | Rota | Descrição |
-|---|---|---|
-| `GET` | `/planetas` | Lista todos os planetas salvos |
-| `GET` | `/planetas/<nome>` | Retorna um planeta pelo nome (sem diferenciar maiúsculas/minúsculas) |
-| `POST` | `/atualizar` | Busca os dados novamente na API Ninjas e regrava `planetas.json` |
+**Fase 0: fundação**
 
-### Exemplos
+- [X] Reorganizar o projeto na nova estrutura
+- [X] Documentar arquitetura, física e plano de validação
+- [ ] Escrever `horizons.py` e baixar os primeiros dados reais
+- [ ] Converter os dados brutos para `data/processed/`
 
-```bash
-curl http://localhost:5000/planetas/earth
-```
+**Fase 1: motor básico**
 
-```json
-{
-    "nome": "Earth",
-    "massa_kg": 5.97e24,
-    "raio_orbital_m": 149600000000.0,
-    "periodo_dias": 365.25,
-    "velocidade_media_m_s": 29785.7,
-    "posicao": { "x": 149600000000.0, "y": 0.0 },
-    "velocidade": { "x": 0.0, "y": 29785.7 }
-}
-```
+- [ ] `vetor3`, `corpo` e `sistema` em C, com testes
+- [ ] Leitura das condições iniciais e escrita de trajetórias
+- [ ] Migrar o integrador de Euler semi-implícito de `legacy/`
 
-```bash
-curl -X POST http://localhost:5000/atualizar
-```
+**Fase 2: os três níveis de física**
 
-```json
-{ "mensagem": "Dados atualizados com sucesso.", "total": 8 }
-```
+- [ ] Nível 1: Kepler analítico
+- [ ] Nível 2: Newton com N corpos + integradores Verlet e RK4
+- [ ] Nível 3: correção da relatividade geral
+- [ ] Experimentos de validação (ver [docs/validacao.md](docs/validacao.md))
 
-Respostas de erro usam o código HTTP correspondente: `404` quando não há dados ou o planeta não existe, e `500` quando a atualização falha.
+**Fase 3: visualização**
+
+- [ ] Motor compilado para WebAssembly
+- [ ] Visualização 3D com Three.js
+
+**Fase 4: além dos planetas**
+
+- [ ] Asteroides como partículas de teste (caso de validação: Apophis, 13/04/2029)
+- [ ] Foguetes: empuxo, massa variável, transferências orbitais
 
 ---
 
-## 🗺️ Roadmap
+## Documentação
 
-- [x] Coleta de dados reais dos planetas via API
-- [x] Conversão de unidades e cálculo do vetor de estado inicial
-- [x] API REST com Flask
-- [x] Leitura do JSON em C com cJSON
-- [x] Modelo gravitacional e integrador de Euler semi-implícito
-- [ ] Conectar `main.c` ao módulo `planetas.c` e rodar o laço de simulação
-- [ ] Exportar as trajetórias para CSV
-- [ ] Visualizar as órbitas (ex.: Python + Matplotlib)
-- [ ] Órbitas elípticas a partir da excentricidade real
-- [ ] Interação gravitacional entre planetas (problema de N corpos)
-- [ ] Integradores de maior precisão (Velocity Verlet, Runge-Kutta 4)
+| Documento                                 | Conteúdo                                                                     |
+| ----------------------------------------- | ----------------------------------------------------------------------------- |
+| [docs/arquitetura.md](docs/arquitetura.md) | Função de cada pasta e arquivo, regras de uso da API e dos dados            |
+| [docs/fisica.md](docs/fisica.md)           | Todas as equações do simulador, com definição, desenvolvimento e exemplos |
+| [docs/validacao.md](docs/validacao.md)     | Métricas, experimentos planejados e registro dos resultados                  |
 
 ---
 
-## 📚 Créditos
+## Créditos
 
-- Dados planetários: [API Ninjas — Planets API](https://api-ninjas.com/api/planets)
+- Efemérides: [JPL Horizons](https://ssd.jpl.nasa.gov/horizons/), NASA/JPL Solar System Dynamics
 - Leitura de JSON em C: [cJSON](https://github.com/DaveGamble/cJSON), de Dave Gamble (licença MIT)
+- Referência de integração N corpos: [REBOUND](https://rebound.readthedocs.io/)
 
 ---
 
 <div align="center">
-
-Desenvolvido por **[Diego Renato](https://github.com/drenato-v)** · 🔭 Interessado em astrofísica e no código que a descreve
-
-</div>

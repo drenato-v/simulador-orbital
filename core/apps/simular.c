@@ -1,0 +1,1 @@
+// main(): lê config → roda → salva resultados

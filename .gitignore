@@ -1,0 +1,22 @@
+# --- Sistema ---
+.DS_Store
+
+# --- Compilação C ---
+build/
+*.o
+*.out
+main
+simular
+
+# --- Python ---
+__pycache__/
+*.pyc
+.venv/
+.ipynb_checkpoints/
+
+# --- Saídas de simulação (regeneráveis) ---
+results/*
+!results/.gitkeep
+
+# --- Segredos ---
+.env

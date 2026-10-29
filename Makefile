@@ -1,0 +1,1 @@
+# compila o motor e roda os testes
